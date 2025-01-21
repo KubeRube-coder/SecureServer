@@ -28,7 +28,7 @@ namespace SecureServer.Controllers
             if (user == null || user.Password != loginModel.Password)
                 return Unauthorized();
 
-            var subscription = await _context.subscriptions.SingleOrDefaultAsync(s => s.login == loginModel.Username);
+            var subscription = await _context.subscription.SingleOrDefaultAsync(s => s.login == loginModel.Username);
             bool subHas = false;
 
             if (subscription != null)
@@ -42,7 +42,7 @@ namespace SecureServer.Controllers
                     steamid = user.SteamId,
                     subActive = false,
                 };
-                _context.subscriptions.Add(SubData);
+                _context.subscription.Add(SubData);
             }
 
             var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
