@@ -11,6 +11,7 @@ namespace SecureServer.Data
         public DbSet<Mod> Mods { get; set; }
         public DbSet<Blacklist> Blacklist { get; set; }
         public DbSet<ActiveToken> ActiveTokens { get; set; }
+        public DbSet<subscription> subscriptions { get; set; }
 
     }
 }

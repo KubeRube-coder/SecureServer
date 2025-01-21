@@ -28,6 +28,23 @@ namespace SecureServer.Controllers
             if (user == null || user.Password != loginModel.Password)
                 return Unauthorized();
 
+            var subscription = await _context.subscriptions.SingleOrDefaultAsync(s => s.login == loginModel.Username);
+            bool subHas = false;
+
+            if (subscription != null)
+            {
+                subHas = subscription.subActive;
+            } else
+            {
+                var SubData = new subscription
+                {
+                    login = user.Login,
+                    steamid = user.SteamId,
+                    subActive = false,
+                };
+                _context.subscriptions.Add(SubData);
+            }
+
             var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
             var token = GenerateJwtToken(loginModel.Username, ipAddress, string.Format("RRWORKSHOP-{0}-", loginModel.Username));
 
@@ -40,7 +57,13 @@ namespace SecureServer.Controllers
             if (existingToken != null)
             {
                 existingToken.JwtToken = token;
-                existingToken.ExpiryDate = DateTime.UtcNow.AddMinutes(30);
+                if (subHas && subscription != null)
+                {
+                    existingToken.ExpiryDate = subscription.expireData;
+                } else
+                {
+                    existingToken.ExpiryDate = DateTime.UtcNow.AddMinutes(30);
+                }
                 _context.ActiveTokens.Update(existingToken);
             }
             else

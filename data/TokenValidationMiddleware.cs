@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using SecureServer.Data;
 using SecureServer.Models;
 
@@ -7,55 +8,158 @@ namespace SecureServer.data
     public class TokenValidationMiddleware
     {
         private readonly RequestDelegate _next;
+        private readonly IMemoryCache _memoryCache;
+        private readonly TimeSpan _blockDuration = TimeSpan.FromMinutes(5);
+        private readonly int _maxRequests = 10;
+        private readonly TimeSpan _timeWindow = TimeSpan.FromSeconds(30);
 
-        public TokenValidationMiddleware(RequestDelegate next)
+        private readonly int _maxRequestsExcludedPaths = 20;
+        private readonly TimeSpan _timeWindowExcludedPaths = TimeSpan.FromMinutes(2);
+
+        public TokenValidationMiddleware(RequestDelegate next, IMemoryCache memoryCache)
         {
             _next = next;
+            _memoryCache = memoryCache;
         }
 
         public async Task InvokeAsync(HttpContext context, IServiceProvider serviceProvider)
         {
-            var path = context.Request.Path.Value;
-
-            if (path != null && ((path.StartsWith("/api/auth/login") || (path.StartsWith("/api/check/status")))))   // Тут мы не обрабатываем случаи, когда пытаемся залогиниться
+            if (IsExcludedPath(context.Request.Path.Value))
             {
-                await _next(context);
+                await HandleExcludedPathRequest(context);
                 return;
             }
 
-            var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();   // Получаем данные где есть указано Authorization
-            var username = context.Request.Headers["UserName"].FirstOrDefault();                        // и UserName
+            var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
+            var username = context.Request.Headers["UserName"].FirstOrDefault();
 
-            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username) || !await ValidateTokenAsync(token, username, serviceProvider)) // Если какие-то данные не введены, отклоняем запрос
+            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username))
             {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsync("Unauthorized from validation");
+                await DenyRequest(context, "Unauthorized from validation");
+                return;
+            }
+
+            await HandleRequestFrequency(context, username);
+            await HandleTokenValidation(context, token, username, serviceProvider);
+        }
+
+        private bool IsExcludedPath(string path)
+        {
+            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/status") || path.StartsWith("/health"));
+        }
+
+        private async Task HandleExcludedPathRequest(HttpContext context)
+        {
+            var clientKeyExcluded = $"ExcludedPathFrequency:{context.Connection.RemoteIpAddress}";
+
+            if (!_memoryCache.TryGetValue(clientKeyExcluded, out ClientRequestInfo requestInfoExcluded))
+            {
+                requestInfoExcluded = new ClientRequestInfo { RequestCount = 1, LastRequestTime = DateTime.UtcNow };
+                _memoryCache.Set(clientKeyExcluded, requestInfoExcluded, TimeSpan.FromMinutes(10));
+            }
+            else
+            {
+                if (DateTime.UtcNow - requestInfoExcluded.LastRequestTime <= _timeWindowExcludedPaths)
+                {
+                    requestInfoExcluded.RequestCount++;
+                    if (requestInfoExcluded.RequestCount > _maxRequestsExcludedPaths)
+                    {
+                        await BlockRequest(context, "Too many requests to excluded path. You are temporarily blocked.");
+                        return;
+                    }
+                }
+                else
+                {
+                    requestInfoExcluded.RequestCount = 1;
+                }
+
+                requestInfoExcluded.LastRequestTime = DateTime.UtcNow;
+                _memoryCache.Set(clientKeyExcluded, requestInfoExcluded, TimeSpan.FromMinutes(10));
+            }
+
+            await _next(context);
+        }
+
+        private async Task HandleRequestFrequency(HttpContext context, string username)
+        {
+            var clientKey = $"RequestFrequency:{username}";
+
+            if (!_memoryCache.TryGetValue(clientKey, out ClientRequestInfo requestInfo))
+            {
+                requestInfo = new ClientRequestInfo { RequestCount = 1, BlockedUntil = null, LastRequestTime = DateTime.UtcNow };
+                _memoryCache.Set(clientKey, requestInfo, TimeSpan.FromMinutes(10));
+            }
+            else
+            {
+                if (requestInfo.BlockedUntil != null && requestInfo.BlockedUntil > DateTime.UtcNow)
+                {
+                    await BlockRequest(context, "Too many requests. You are temporarily blocked.");
+                    return;
+                }
+
+                if (DateTime.UtcNow - requestInfo.LastRequestTime <= _timeWindow)
+                {
+                    requestInfo.RequestCount++;
+                    if (requestInfo.RequestCount > _maxRequests)
+                    {
+                        requestInfo.BlockedUntil = DateTime.UtcNow.Add(_blockDuration);
+                        await BlockRequest(context, "Too many requests. You are temporarily blocked.");
+                        return;
+                    }
+                }
+                else
+                {
+                    requestInfo.RequestCount = 1;
+                }
+
+                requestInfo.LastRequestTime = DateTime.UtcNow;
+            }
+
+            _memoryCache.Set(clientKey, requestInfo, TimeSpan.FromMinutes(10));
+        }
+
+        private async Task HandleTokenValidation(HttpContext context, string token, string username, IServiceProvider serviceProvider)
+        {
+            if (!await ValidateTokenAsync(token, username, serviceProvider))
+            {
+                await DenyRequest(context, "Unauthorized from validation");
                 return;
             }
 
             await _next(context);
         }
 
+        private async Task DenyRequest(HttpContext context, string message)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsync(message);
+        }
+
+        private async Task BlockRequest(HttpContext context, string message)
+        {
+            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await context.Response.WriteAsync(message);
+        }
+
         private async Task<bool> ValidateTokenAsync(string token, string username, IServiceProvider serviceProvider)
         {
-            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username))
-                return false;
+            using var scope = serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-            using var scope = serviceProvider.CreateScope();    //Способ, чтобы получить бд
-            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();   // получаем бд
+            var user = await dbContext.Users.SingleOrDefaultAsync(u => u.Login == username);
+            var date = await dbContext.ActiveTokens.SingleOrDefaultAsync(u => u.Username == username);
 
-            var user = await dbContext.Users.SingleOrDefaultAsync(u => u.Login == username);    // получаем данные с бд из таблицы Users
-            var date = await dbContext.ActiveTokens.SingleOrDefaultAsync(u => u.Username == username);  // получаем данные с бд из таблицы ActiveTokens
-
-            if (date.ExpiryDate < DateTime.UtcNow)  // Если токен истёк, то не даём получить данные
-            {
-                return false;
-            }
-
-            if (user == null || user.Banned == true)    // Если игрок забанен, либо не найден, то так же не отдаём запрос
+            if (date?.ExpiryDate < DateTime.UtcNow || user == null || user.Banned)
                 return false;
 
             return user.JwtSecretKey == token;
+        }
+
+        private class ClientRequestInfo
+        {
+            public int RequestCount { get; set; }
+            public DateTime LastRequestTime { get; set; }
+            public DateTime? BlockedUntil { get; set; }
         }
     }
 }
