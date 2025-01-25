@@ -1,0 +1,14 @@
+﻿@model SecureServer.Data.ApplicationDbContext
+
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Admin Panel";
+    var token = Context.Request.Query["token"].ToString();
+
+    var usernameAdmin = Model.Users.FirstOrDefault(u => u.JwtSecretKey == token);
+}
+
+<div class="welcome">
+    <h1>Welcome to the Admin panel</h1>
+    <h2>Greetings @usernameAdmin.Login</h2>
+</div>

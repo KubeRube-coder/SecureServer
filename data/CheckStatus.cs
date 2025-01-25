@@ -3,6 +3,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace SecureServer.Data
 {
+
     [ApiController]
     [Route("api/check")]
     public class CheckStatus : ControllerBase
@@ -30,6 +31,22 @@ namespace SecureServer.Data
             {
                 OverallStatus = status,
                 Components = details
+            });
+        }
+
+        [HttpGet("help")]
+        public async Task<IActionResult> help()
+        {
+            return Ok(new
+            {
+                help = "Данный запрос существует для ознакомления с ошибками",
+                statusCode400 = "Сервер не может или не будет обрабатывать запрос из-за чего-то, что воспринимается как ошибка клиента (например, неправильный синтаксис, формат или маршрутизация запроса).",
+                statusCode401 = "Сервер получил неправильные данные для авторизации.",
+                statusCode403 = "Клиент не имеет права доступа к запрашиваемому контенту.",
+                statusCode404 = "Сервер не может найти запрашиваемый ресурс",
+                statusCode418 = "Шутка. Сервер отклоняет попытку заварить кофе в чайнике :))",
+                statusCode429 = "Клиент отправил слишком много запросов в определённый промежуток времени. (Запросы будут заблокированы на некоторое время)",
+                statusCode500 = "Внутренняя ошибка сервера. В основном проблема с базой данных"
             });
         }
     }

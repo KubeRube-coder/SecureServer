@@ -14,77 +14,103 @@ namespace SecureServer.Controllers
     public class AuthController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly ILogger<AuthController> _logger;
 
-        public AuthController(ApplicationDbContext context)
+        public AuthController(ApplicationDbContext context, ILogger<AuthController> logger)
         {
-            _context = context;
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _logger.LogInformation("AuthController initialized.");
         }
 
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginModel loginModel)
         {
-            var user = await _context.Users.SingleOrDefaultAsync(u => u.Login == loginModel.Username);
-
-            if (user == null || user.Password != loginModel.Password)
-                return Unauthorized();
-
-            var subscription = await _context.subscription.SingleOrDefaultAsync(s => s.login == loginModel.Username);
-            bool subHas = false;
-
-            if (subscription != null)
+            if (loginModel == null)
             {
-                subHas = subscription.subActive;
-            } else
-            {
-                var SubData = new subscription
-                {
-                    login = user.Login,
-                    steamid = user.SteamId,
-                    subActive = false,
-                };
-                _context.subscription.Add(SubData);
+                _logger.LogError("LoginModel is null.");
+                return BadRequest("Invalid request.");
             }
 
-            var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
-            var token = GenerateJwtToken(loginModel.Username, ipAddress, string.Format("RRWORKSHOP-{0}-", loginModel.Username));
+            _logger.LogInformation("Login attempt for user: {Username}", loginModel.Username);
 
-            user.JwtSecretKey = token;
-            user.lastip = ipAddress;
-
-            var existingToken = await _context.ActiveTokens
-                .SingleOrDefaultAsync(t => t.Username == loginModel.Username);
-
-            if (existingToken != null)
+            try
             {
-                existingToken.JwtToken = token;
-                if (subHas && subscription != null)
+                var user = await _context.Users.SingleOrDefaultAsync(u => u.Login == loginModel.Username);
+                if (user == null || user.Password != loginModel.Password)
                 {
-                    existingToken.ExpiryDate = subscription.expireData;
-                } else
-                {
-                    existingToken.ExpiryDate = DateTime.UtcNow.AddMinutes(30);
+                    _logger.LogWarning("Failed login attempt for username: {Username}.", loginModel.Username);
+                    return Unauthorized();
                 }
-                _context.ActiveTokens.Update(existingToken);
-            }
-            else
-            {
-                var activeToken = new ActiveToken
+
+                _logger.LogInformation("User {Username} authenticated successfully.", user.Login);
+
+                var subscription = await _context.subscription.SingleOrDefaultAsync(s => s.login == loginModel.Username);
+                bool subHas = false;
+
+                if (subscription != null)
                 {
-                    JwtToken = token,
-                    Username = loginModel.Username,
-                    ExpiryDate = DateTime.UtcNow.AddMinutes(30)
-                };
-                _context.ActiveTokens.Add(activeToken);
+                    _logger.LogInformation("User {Username} found in subscription database.", user.Login);
+                    subHas = subscription.subActive;
+                }
+                else
+                {
+                    _logger.LogInformation("User {Username} not found in subscription database. Creating new entry.", user.Login);
+                    var SubData = new subscription
+                    {
+                        login = user.Login,
+                        steamid = user.SteamId,
+                        subActive = false,
+                    };
+                    _context.subscription.Add(SubData);
+                    await _context.SaveChangesAsync();
+                    _logger.LogInformation("Subscription record created for user: {Username}.", user.Login);
+                }
+
+                var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+                _logger.LogInformation("IP Address for user {Username}: {IpAddress}", user.Login, ipAddress);
+
+                var token = GenerateJwtToken(loginModel.Username, ipAddress, $"RRWORKSHOP-{loginModel.Username}-");
+                _logger.LogInformation("JWT token generated for user: {Username}", user.Login);
+
+                user.JwtSecretKey = token;
+                user.lastip = ipAddress;
+
+                var existingToken = await _context.ActiveTokens
+                    .SingleOrDefaultAsync(t => t.Username == loginModel.Username);
+
+                if (existingToken != null)
+                {
+                    _logger.LogInformation("Existing token found for user: {Username}. Updating token.", user.Login);
+                    existingToken.JwtToken = token;
+                    existingToken.ExpiryDate = subHas ? subscription.expireData : DateTime.UtcNow.AddMinutes(30);
+
+                    _logger.LogInformation("Token expiry date set to {ExpiryDate} for user: {Username}.", existingToken.ExpiryDate, user.Login);
+                    _context.ActiveTokens.Update(existingToken);
+                }
+                else
+                {
+                    _logger.LogInformation("No existing token found for user: {Username}. Creating new token.", user.Login);
+                    var activeToken = new ActiveToken
+                    {
+                        JwtToken = token,
+                        Username = loginModel.Username,
+                        ExpiryDate = DateTime.UtcNow.AddMinutes(30)
+                    };
+                    _context.ActiveTokens.Add(activeToken);
+                }
+
+                _context.Users.Update(user);
+                await _context.SaveChangesAsync();
+                _logger.LogInformation("User {Username} data and token saved successfully.", user.Login);
+
+                return Ok(new { token, username = user.Login, steamid = user.SteamId, lasip = user.lastip });
             }
-
-            _context.Users.Update(user);
-            await _context.SaveChangesAsync();
-
-            string username = user.Login;
-            string steamid = user.SteamId;
-            string lasip = user.lastip;
-
-            return Ok(new { token, username, steamid, lasip});
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while processing the login for user: {Username}.", loginModel.Username);
+                return StatusCode(500, "An error occurred while processing your request.");
+            }
         }
 
         private string GenerateJwtToken(string username, string ipAddress, string secretKey)

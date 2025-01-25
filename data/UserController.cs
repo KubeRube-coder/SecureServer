@@ -17,10 +17,10 @@ namespace SecureServer.Controllers
             _context = context;
         }
 
-        [HttpGet("{id}")]
-        public async Task<IActionResult> GetUserDetails(int id)
+        [HttpGet("{username}")]
+        public async Task<IActionResult> GetUserDetails(string username)
         {
-            var user = await _context.Users.FindAsync(id);
+            var user = await _context.Users.FindAsync(username);
             if (user == null) return NotFound();
 
             return Ok(new

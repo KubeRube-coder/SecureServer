@@ -1,10 +1,7 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.IdentityModel.Tokens;
 using SecureServer.data;
 using SecureServer.Data;
-using System.Text;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -14,6 +11,12 @@ builder.Configuration
 
 string secretKey = builder.Configuration["Jwt:SecretKey"];
 
+Log.Logger = new LoggerConfiguration()
+    .WriteTo.Console()
+    .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Minute) // Логи пишутся в файлы, меняющиеся ежедневно
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"), // Подключаемся к бд
@@ -21,6 +24,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     )
 );
 
+builder.Host.UseSerilog();
+
+builder.Services.AddRazorPages();
 builder.Services.AddControllers();  // Прослушиваем контроллеры
 builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks()
@@ -32,7 +38,7 @@ app.UseExceptionHandler("/error");  // Если выйдет ошибка, то клиенту не отправи
 
 app.Map("/error", (HttpContext context) =>
 {
-    var response = new { Message = "It seems there was an error. Don't worry, we'll fix it soon." };
+    var response = new { Message = "It seems there was an error. Don't worry, we'll fix it soon. Or contact us: https://discord.gg/qqXKhxAYAE" };
     return Results.Problem(response.Message, statusCode: 500);
 });
 
@@ -50,6 +56,7 @@ app.UseMiddleware<TokenValidationMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapRazorPages();
 app.MapControllers();
 app.MapHealthChecks("/health");
 

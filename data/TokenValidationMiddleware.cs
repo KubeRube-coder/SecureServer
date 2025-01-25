@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using SecureServer.Controllers;
 using SecureServer.Data;
 using SecureServer.Models;
 
@@ -13,13 +14,16 @@ namespace SecureServer.data
         private readonly int _maxRequests = 10;
         private readonly TimeSpan _timeWindow = TimeSpan.FromSeconds(30);
 
+        private readonly ILogger<TokenValidationMiddleware> _logger;
+
         private readonly int _maxRequestsExcludedPaths = 20;
         private readonly TimeSpan _timeWindowExcludedPaths = TimeSpan.FromMinutes(2);
 
-        public TokenValidationMiddleware(RequestDelegate next, IMemoryCache memoryCache)
+        public TokenValidationMiddleware(RequestDelegate next, IMemoryCache memoryCache, ILogger<TokenValidationMiddleware> logger)
         {
             _next = next;
             _memoryCache = memoryCache;
+            _logger = logger;
         }
 
         public async Task InvokeAsync(HttpContext context, IServiceProvider serviceProvider)
@@ -35,6 +39,7 @@ namespace SecureServer.data
 
             if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username))
             {
+                _logger.LogWarning("Some of string null or empty. Username: {username}, token: {token}. Refuse request", username, token);
                 await DenyRequest(context, "Unauthorized from validation");
                 return;
             }
@@ -45,7 +50,7 @@ namespace SecureServer.data
 
         private bool IsExcludedPath(string path)
         {
-            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/status") || path.StartsWith("/health"));
+            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/admin/"));
         }
 
         private async Task HandleExcludedPathRequest(HttpContext context)
@@ -93,6 +98,7 @@ namespace SecureServer.data
             {
                 if (requestInfo.BlockedUntil != null && requestInfo.BlockedUntil > DateTime.UtcNow)
                 {
+                    _logger.LogWarning("[{username}] Blocked request while temporarily blocked.", username);
                     await BlockRequest(context, "Too many requests. You are temporarily blocked.");
                     return;
                 }
@@ -103,6 +109,7 @@ namespace SecureServer.data
                     if (requestInfo.RequestCount > _maxRequests)
                     {
                         requestInfo.BlockedUntil = DateTime.UtcNow.Add(_blockDuration);
+                        _logger.LogWarning("[{username}] Request limit exceeded. Blocking user for {duration} minutes.", username, _blockDuration.TotalMinutes);
                         await BlockRequest(context, "Too many requests. You are temporarily blocked.");
                         return;
                     }
@@ -122,21 +129,29 @@ namespace SecureServer.data
         {
             if (!await ValidateTokenAsync(token, username, serviceProvider))
             {
+                _logger.LogWarning("[{username}] Token validation failed!", username);
                 await DenyRequest(context, "Unauthorized from validation");
                 return;
             }
 
+            _logger.LogInformation("[{username}] Token validated successfully.", username);
             await _next(context);
         }
 
         private async Task DenyRequest(HttpContext context, string message)
         {
+            var username = context.Request.Headers["UserName"].FirstOrDefault();
+            _logger.LogWarning("[{username}] Access denied: {message}", username ?? "Unknown", message);
+
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(message);
         }
 
         private async Task BlockRequest(HttpContext context, string message)
         {
+            var username = context.Request.Headers["UserName"].FirstOrDefault();
+            _logger.LogWarning("[{username}] User blocked: {message}", username ?? "Unknown", message);
+
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
             await context.Response.WriteAsync(message);
         }
