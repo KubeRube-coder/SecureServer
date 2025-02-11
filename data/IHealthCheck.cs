@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using SecureServer.Data;
+using System.Diagnostics;
 
 public class DatabaseHealthCheck : IHealthCheck
 {
@@ -15,15 +16,29 @@ public class DatabaseHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
         try
         {
-            // Выполняем простой запрос, чтобы проверить подключение
+            // Измеряем время выполнения запроса
             await _dbContext.Database.ExecuteSqlRawAsync("SELECT 1", cancellationToken);
-            return HealthCheckResult.Healthy("База данных доступна.");
+            stopwatch.Stop();
+
+            var responseTime = stopwatch.ElapsedMilliseconds; // Время в миллисекундах
+
+            return HealthCheckResult.Healthy($"База данных доступна. Время ответа: {responseTime} мс",
+                new Dictionary<string, object>
+                {
+                    { "ResponseTimeMs", responseTime }
+                });
         }
         catch (Exception ex)
         {
-            return HealthCheckResult.Unhealthy("База данных недоступна.", ex);
+            stopwatch.Stop();
+            return HealthCheckResult.Unhealthy("База данных недоступна.", ex,
+                new Dictionary<string, object>
+                {
+                    { "ErrorMessage", ex.Message }
+                });
         }
     }
 }

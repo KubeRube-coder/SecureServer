@@ -10,14 +10,15 @@ namespace SecureServer.data
     {
         private readonly RequestDelegate _next;
         private readonly IMemoryCache _memoryCache;
-        private readonly TimeSpan _blockDuration = TimeSpan.FromMinutes(5);
-        private readonly int _maxRequests = 10;
-        private readonly TimeSpan _timeWindow = TimeSpan.FromSeconds(30);
+        private readonly TimeSpan _blockDuration = TimeSpan.FromMinutes(1);
+        private readonly int _maxRequests = 100;
+        private readonly TimeSpan _timeWindow = TimeSpan.FromMinutes(1);
 
         private readonly ILogger<TokenValidationMiddleware> _logger;
 
-        private readonly int _maxRequestsExcludedPaths = 20;
-        private readonly TimeSpan _timeWindowExcludedPaths = TimeSpan.FromMinutes(2);
+        private readonly int _maxRequestsExcludedPaths = 50;
+        private readonly TimeSpan _timeWindowExcludedPaths = TimeSpan.FromMinutes(1);
+        private readonly TimeSpan _blockDurationExcluded = TimeSpan.FromMinutes(5);
 
         public TokenValidationMiddleware(RequestDelegate next, IMemoryCache memoryCache, ILogger<TokenValidationMiddleware> logger)
         {
@@ -28,8 +29,15 @@ namespace SecureServer.data
 
         public async Task InvokeAsync(HttpContext context, IServiceProvider serviceProvider)
         {
+            if (context.Request.Path.Value == null)
+            {
+                await UnknownRequest(context, "The requested resource was not found.");
+                return;
+            }
+
             if (IsExcludedPath(context.Request.Path.Value))
             {
+                _logger.LogInformation("------------------------------");
                 await HandleExcludedPathRequest(context);
                 return;
             }
@@ -50,7 +58,7 @@ namespace SecureServer.data
 
         private bool IsExcludedPath(string path)
         {
-            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/admin/"));
+            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/favicon") || path.StartsWith("/api/mods/public") || path.StartsWith("/api/token/valid") || path.StartsWith("/api/user/getMods"));
         }
 
         private async Task HandleExcludedPathRequest(HttpContext context)
@@ -79,7 +87,7 @@ namespace SecureServer.data
                 }
 
                 requestInfoExcluded.LastRequestTime = DateTime.UtcNow;
-                _memoryCache.Set(clientKeyExcluded, requestInfoExcluded, TimeSpan.FromMinutes(10));
+                _memoryCache.Set(clientKeyExcluded, requestInfoExcluded, _blockDurationExcluded);
             }
 
             await _next(context);
@@ -153,6 +161,14 @@ namespace SecureServer.data
             _logger.LogWarning("[{username}] User blocked: {message}", username ?? "Unknown", message);
 
             context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await context.Response.WriteAsync(message);
+        }
+
+        private async Task UnknownRequest(HttpContext context, string message)
+        {
+            _logger.LogInformation("The requested resource was not found. Path: {path}", context.Request.Path);
+
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
             await context.Response.WriteAsync(message);
         }
 

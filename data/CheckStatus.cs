@@ -24,6 +24,7 @@ namespace SecureServer.Data
             {
                 Component = e.Key,
                 Status = e.Value.Status.ToString(),
+                avgRespone = report.TotalDuration.TotalMilliseconds.ToString() + " ms",
                 Description = e.Value.Description
             });
 
