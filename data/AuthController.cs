@@ -68,14 +68,17 @@ namespace SecureServer.Controllers
                     _logger.LogInformation("Subscription record created for user: {Username}.", user.Login);
                 }
 
-                var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+                var ipAddress = HttpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()
+                                ?? HttpContext.Connection.RemoteIpAddress?.ToString()
+                                ?? "No IP";
+
+                if (ipAddress == "65.21.83.32") return Unauthorized();
+
                 _logger.LogInformation("IP Address for user {Username}: {IpAddress}", user.Login, ipAddress);
-
-                var token = GenerateJwtToken(loginModel.Username, ipAddress, $"RRWORKSHOP-{loginModel.Username}-");
-                _logger.LogInformation("JWT token generated for user: {Username}", user.Login);
-
-                user.JwtSecretKey = token;
-                user.lastip = ipAddress;
+                if (user.lastip != null && user.lastip != ipAddress)
+                {
+                    user.lastip = ipAddress;
+                }
 
                 var existingToken = await _context.ActiveTokens
                     .SingleOrDefaultAsync(t => t.Username == loginModel.Username);
@@ -83,7 +86,6 @@ namespace SecureServer.Controllers
                 if (existingToken != null)
                 {
                     _logger.LogInformation("Existing token found for user: {Username}. Updating token.", user.Login);
-                    existingToken.JwtToken = token;
                     existingToken.ExpiryDate = subHas ? subscription.expireData : existingToken.ExpiryDate;
 
                     _logger.LogInformation("Token expiry date set to {ExpiryDate} for user: {Username}.", existingToken.ExpiryDate, user.Login);
@@ -91,6 +93,9 @@ namespace SecureServer.Controllers
                 }
                 else
                 {
+                    var token = GenerateJwtToken(loginModel.Username, ipAddress, $"RRWORKSHOP-{loginModel.Username}-");
+                    _logger.LogInformation("JWT token generated for user: {Username}", user.Login);
+
                     _logger.LogInformation("No existing token found for user: {Username}. Creating new token.", user.Login);
                     var activeToken = new ActiveToken
                     {
@@ -99,13 +104,13 @@ namespace SecureServer.Controllers
                         ExpiryDate = existingToken != null ? existingToken.ExpiryDate : DateTime.UtcNow.AddMinutes(5)
                     };
                     _context.ActiveTokens.Add(activeToken);
+                    _logger.LogInformation("User {Username} data and token saved successfully.", user.Login);
                 }
 
                 _context.Users.Update(user);
                 await _context.SaveChangesAsync();
-                _logger.LogInformation("User {Username} data and token saved successfully.", user.Login);
 
-                return Ok(new { token, username = user.Login, steamid = user.SteamId, lasip = user.lastip, discordId = user.DiscordId});
+                return Ok(new { token = existingToken.JwtToken, username = user.Login, steamid = user.SteamId, lasip = user.lastip, discordId = user.DiscordId});
             }
             catch (Exception ex)
             {
@@ -159,14 +164,17 @@ namespace SecureServer.Controllers
                     _logger.LogInformation("Subscription record created for user: {Username}.", user.Login);
                 }
 
-                var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
+                var ipAddress = HttpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()
+                                ?? HttpContext.Connection.RemoteIpAddress?.ToString()
+                                ?? "No IP";
+
+                if (ipAddress == "65.21.83.32") return Unauthorized();
+
                 _logger.LogInformation("IP Address for user {Username}: {IpAddress}", user.Login, ipAddress);
-
-                var token = GenerateJwtToken(loginModel.Username, ipAddress, $"RRWORKSHOP-{loginModel.Username}-");
-                _logger.LogInformation("JWT token generated for user: {Username}", user.Login);
-
-                user.JwtSecretKey = token;
-                user.lastip = ipAddress;
+                if (user.lastip != null && user.lastip != ipAddress)
+                {
+                    user.lastip = ipAddress;
+                }
 
                 var existingToken = await _context.ActiveTokens
                     .SingleOrDefaultAsync(t => t.Username == loginModel.Username);
@@ -174,7 +182,6 @@ namespace SecureServer.Controllers
                 if (existingToken != null)
                 {
                     _logger.LogInformation("Existing token found for user: {Username}. Updating token.", user.Login);
-                    existingToken.JwtToken = token;
                     existingToken.ExpiryDate = subHas ? subscription.expireData : existingToken.ExpiryDate;
 
                     _logger.LogInformation("Token expiry date set to {ExpiryDate} for user: {Username}.", existingToken.ExpiryDate, user.Login);
@@ -182,6 +189,9 @@ namespace SecureServer.Controllers
                 }
                 else
                 {
+                    var token = GenerateJwtToken(loginModel.Username, ipAddress, $"RRWORKSHOP-{loginModel.Username}-");
+                    _logger.LogInformation("JWT token generated for user: {Username}", user.Login);
+
                     _logger.LogInformation("No existing token found for user: {Username}. Creating new token.", user.Login);
                     var activeToken = new ActiveToken
                     {
@@ -190,21 +200,27 @@ namespace SecureServer.Controllers
                         ExpiryDate = existingToken != null ? existingToken.ExpiryDate : DateTime.UtcNow.AddMinutes(5)
                     };
                     _context.ActiveTokens.Add(activeToken);
+                    _logger.LogInformation("User {Username} data and token saved successfully.", user.Login);
                 }
 
                 _context.Users.Update(user);
                 await _context.SaveChangesAsync();
-                _logger.LogInformation("User {Username} data and token saved successfully.", user.Login);
 
-                var claimedMods = user.ClaimedMods.Split(',')
+                var serveDB = await _context.Servers.SingleOrDefaultAsync(s => s.ip == ipAddress);
+
+                if (serveDB == null) return Ok(new { token = existingToken.JwtToken, username = user.Login, steamid = user.SteamId, lasip = user.lastip, discordId = user.DiscordId });
+
+                if (serveDB.owner_id != user.Id) return Unauthorized();
+
+                var claimedMods = serveDB.mods.Split(',')
                     .Select(id => int.Parse(id))
                     .ToList();
-                
+
                 var mods = await _context.Mods
                     .Where(m => claimedMods.Contains(m.Id))
                     .ToListAsync();
 
-                return Ok(new { token, username = user.Login, steamid = user.SteamId, lasip = user.lastip, discordId = user.DiscordId, mods });
+                return Ok(new { token = existingToken.JwtToken, username = user.Login, steamid = user.SteamId, lasip = user.lastip, discordId = user.DiscordId, mods});
             }
             catch (Exception ex)
             {

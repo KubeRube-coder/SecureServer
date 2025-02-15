@@ -175,6 +175,51 @@ namespace SecureServer.Controllers
 
             return Ok(devs);
         }
+
+
+        [HttpGet("private/getMods/forServers/{servers}")]
+        public async Task<IActionResult> GetModsFromServers(string servers)
+        {
+            if (string.IsNullOrEmpty(servers))
+                return BadRequest("Servers is null!");
+
+            var servNames = servers.Split(',').Select(s => s.Trim()).ToList();
+            var result = new Dictionary<string, object>();
+
+            foreach (var server in servNames)
+            {
+                var serverName = await _context.Servers
+                    .SingleOrDefaultAsync(s => s.name == server);
+
+                if (serverName == null)
+                {
+                    Console.WriteLine($"Server {server} not found.");
+                    continue;
+                }
+
+                Console.WriteLine($"Server: {server}, Mods Raw: {serverName.mods}");
+
+                var modsIds = string.IsNullOrEmpty(serverName.mods)
+                    ? new List<int>()
+                    : serverName.mods.Split(',').Select(int.Parse).ToList();
+
+                Console.WriteLine($"Mods IDs for {server}: {string.Join(", ", modsIds)}");
+
+                var mods = await _context.Mods
+                    .Where(m => modsIds.Contains(m.Id))
+                    .ToListAsync();
+
+                Console.WriteLine($"Found {mods.Count} mods for {server}");
+
+                result[server] = new
+                {
+                    mods = mods
+                };
+            }
+
+            return Ok(result);
+        }
+
     }
 
     [ApiController]
@@ -277,6 +322,22 @@ namespace SecureServer.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(server);
+        }
+    }
+
+    [ApiController]
+    [Route("api/ip")]
+    public class IpController : ControllerBase
+    {
+        [HttpGet("get")]
+        public async Task<IActionResult> GetMyIP()
+        {
+            string ip = HttpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()
+            ?? HttpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "No IP";
+
+            return Ok(ip);
+
         }
     }
 

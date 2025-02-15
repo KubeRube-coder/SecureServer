@@ -34,6 +34,13 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
+// Включаем middleware для обработки заголовков от прокси-серверов
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+                        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+});
+
 app.UseCors(builder => builder
     .AllowAnyOrigin()
     .AllowAnyMethod()

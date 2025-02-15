@@ -37,13 +37,14 @@ namespace SecureServer.data
 
             if (IsExcludedPath(context.Request.Path.Value))
             {
-                _logger.LogInformation("------------------------------");
                 await HandleExcludedPathRequest(context);
                 return;
             }
 
             var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
             var username = context.Request.Headers["UserName"].FirstOrDefault();
+
+            _logger.LogInformation("Token:{token}\nUsername:{user}", token.ToString(), username.ToString());
 
             if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username))
             {
@@ -58,7 +59,7 @@ namespace SecureServer.data
 
         private bool IsExcludedPath(string path)
         {
-            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/favicon") || path.StartsWith("/api/mods/public") || path.StartsWith("/api/token/valid") || path.StartsWith("/api/user/getMods"));
+            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/favicon") || path.StartsWith("/api/mods/public") || path.StartsWith("/api/token/valid") || path.StartsWith("/api/user/getMods") || path.StartsWith("/api/ip"));
         }
 
         private async Task HandleExcludedPathRequest(HttpContext context)
