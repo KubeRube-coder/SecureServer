@@ -1,8 +1,11 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
+using Newtonsoft.Json.Linq;
 using SecureServer.Controllers;
 using SecureServer.Data;
 using SecureServer.Models;
+using System.Collections.Concurrent;
 
 namespace SecureServer.data
 {
@@ -15,6 +18,11 @@ namespace SecureServer.data
         private readonly TimeSpan _timeWindow = TimeSpan.FromMinutes(1);
 
         private readonly ILogger<TokenValidationMiddleware> _logger;
+
+        private static readonly ConcurrentQueue<HttpContext> _requestQueue = new();
+        private static readonly SemaphoreSlim _queueSemaphore = new(1, 1);
+        private const int MaxRequestsPerBlock = 300;
+        private static bool _isProcessing = false;
 
         private readonly int _maxRequestsExcludedPaths = 50;
         private readonly TimeSpan _timeWindowExcludedPaths = TimeSpan.FromMinutes(1);
@@ -35,6 +43,43 @@ namespace SecureServer.data
                 return;
             }
 
+            _requestQueue.Enqueue(context);
+            _logger.LogInformation("Request added to queue. Current queue size: {size}", _requestQueue.Count);
+
+            await ProcessQueue(serviceProvider);
+        }
+
+        private async Task ProcessQueue(IServiceProvider serviceProvider)
+        {
+            if (_isProcessing || _requestQueue.IsEmpty) return;
+
+            await _queueSemaphore.WaitAsync();
+            try
+            {
+                _isProcessing = true;
+
+                while (!_requestQueue.IsEmpty)
+                {
+                    var batch = new List<HttpContext>();
+                    while (batch.Count < MaxRequestsPerBlock && _requestQueue.TryDequeue(out var request))
+                    {
+                        batch.Add(request);
+                    }
+
+                    _logger.LogInformation("Processing batch of {count} requests", batch.Count);
+                    var tasks = batch.Select(async request => await ProcessRequest(request, serviceProvider)).ToList();
+                    await Task.WhenAll(tasks);
+                }
+            }
+            finally
+            {
+                _isProcessing = false;
+                _queueSemaphore.Release();
+            }
+        }
+
+        private async Task ProcessRequest(HttpContext context, IServiceProvider serviceProvider)
+        {
             if (IsExcludedPath(context.Request.Path.Value))
             {
                 await HandleExcludedPathRequest(context);
@@ -44,13 +89,28 @@ namespace SecureServer.data
             var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
             var username = context.Request.Headers["UserName"].FirstOrDefault();
 
-            _logger.LogInformation("Token:{token}\nUsername:{user}", token.ToString(), username.ToString());
+            _logger.LogInformation("Token:{token}\nUsername:{user}", token?.ToString(), username?.ToString());
 
             if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(username))
             {
                 _logger.LogWarning("Some of string null or empty. Username: {username}, token: {token}. Refuse request", username, token);
-                await DenyRequest(context, "Unauthorized from validation");
+                await DenyRequest(context, "Some of entered options == null");
                 return;
+            }
+
+            if (context.Request.Path.Value.StartsWith("/api/admin"))
+            {
+                _logger.LogInformation("Admin api request. Checking for admin premissions");
+                using var scope = serviceProvider.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                var user = dbContext.Users.FirstOrDefault(u => u.Login == username);
+
+                if (user == null || user.role != "admin")
+                {
+                    await DenyRequest(context, "Unauthorized from validation");
+                    return;
+                }
             }
 
             await HandleRequestFrequency(context, username);
@@ -59,7 +119,15 @@ namespace SecureServer.data
 
         private bool IsExcludedPath(string path)
         {
-            return path != null && (path.StartsWith("/api/auth/login") || path.StartsWith("/api/check/") || path.StartsWith("/health") || path.StartsWith("/favicon") || path.StartsWith("/api/mods/public") || path.StartsWith("/api/token/valid") || path.StartsWith("/api/user/getMods") || path.StartsWith("/api/ip"));
+            // Потом под мапу сделать?
+            return path != null && (path.StartsWith("/api/auth/login") || 
+                                    path.StartsWith("/api/check/") || 
+                                    path.StartsWith("/health") || 
+                                    path.StartsWith("/favicon") || 
+                                    path.StartsWith("/api/mods/public") || 
+                                    path.StartsWith("/api/token/valid") || 
+                                    path.StartsWith("/api/user/getMods") || 
+                                    path.StartsWith("/api/ip"));
         }
 
         private async Task HandleExcludedPathRequest(HttpContext context)
@@ -139,7 +207,7 @@ namespace SecureServer.data
             if (!await ValidateTokenAsync(token, username, serviceProvider))
             {
                 _logger.LogWarning("[{username}] Token validation failed!", username);
-                await DenyRequest(context, "Unauthorized from validation");
+                await DenyRequest(context, "Unauthorized from validation. Something wrong!");
                 return;
             }
 
@@ -181,7 +249,7 @@ namespace SecureServer.data
             var user = await dbContext.Users.SingleOrDefaultAsync(u => u.Login == username);
             var date = await dbContext.ActiveTokens.SingleOrDefaultAsync(u => u.Username == username);
 
-            if (date?.ExpiryDate < DateTime.UtcNow || user == null || user.Banned)
+            if (date?.ExpiryDate.Date < DateTime.UtcNow.Date || user == null || user.Banned)
                 return false;
 
             return user.JwtSecretKey == token;

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using SecureServer.data;
 using SecureServer.Data;
 using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,9 +13,11 @@ builder.Configuration
 string secretKey = builder.Configuration["Jwt:SecretKey"];
 
 Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
+    .WriteTo.Console(restrictedToMinimumLevel: LogEventLevel.Information)
     .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
     .Enrich.FromLogContext()
+    .Filter.ByExcluding(log => log.Properties.ContainsKey("SourceContext") &&
+                               log.Properties["SourceContext"].ToString().Contains("Microsoft.EntityFrameworkCore"))
     .CreateLogger();
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -26,15 +29,14 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 
 builder.Host.UseSerilog();
 
-builder.Services.AddRazorPages();
-builder.Services.AddControllers();  // Прослушиваем контроллеры
+builder.Services.AddHostedService<DailyTaskRefresher>();
+builder.Services.AddControllers();
 builder.Services.AddMemoryCache();
 builder.Services.AddHealthChecks()
     .AddCheck<DatabaseHealthCheck>("Database");
 
 var app = builder.Build();
 
-// Включаем middleware для обработки заголовков от прокси-серверов
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
@@ -47,13 +49,13 @@ app.UseCors(builder => builder
     .AllowAnyHeader()
     );
 
-app.UseExceptionHandler("/error");  // Если выйдет ошибка, то клиенту не отправит ошибку, а текст ниже
-
-app.Map("/error", (HttpContext context) =>
+app.UseExceptionHandler(errorApp =>
 {
-    Console.WriteLine(context.Request);
-    var response = new { Message = "It seems there was an error. Don't worry, we'll fix it soon. Or contact us: https://discord.gg/qqXKhxAYAE" };
-    return Results.Problem(response.Message, statusCode: 500);
+    errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = 500;
+        await context.Response.WriteAsync("It seems there was an error. Contact us: https://discord.gg/qqXKhxAYAE");
+    });
 });
 
 app.Use(async (context, next) =>
@@ -62,7 +64,6 @@ app.Use(async (context, next) =>
     var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
     Console.WriteLine("----------------------NEW-BLOCK----------------------");
     Console.WriteLine(context.Request.Path + $"\nRequest Body {body}");
-    Console.WriteLine();
     context.Request.Body.Position = 0;
     await next.Invoke();
     Console.WriteLine("----------------------END-BLOCK----------------------");
@@ -73,7 +74,6 @@ app.UseMiddleware<TokenValidationMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapRazorPages();
 app.UseStaticFiles();
 app.MapControllers();
 app.MapHealthChecks("/health");

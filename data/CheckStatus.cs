@@ -38,6 +38,7 @@ namespace SecureServer.Data
         [HttpGet("help")]
         public async Task<IActionResult> help()
         {
+            // Test request
             return Ok(new
             {
                 help = "Данный запрос существует для ознакомления с ошибками",

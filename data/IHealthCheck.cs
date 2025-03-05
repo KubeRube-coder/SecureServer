@@ -19,7 +19,7 @@ public class DatabaseHealthCheck : IHealthCheck
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            // Измеряем время выполнения запроса
+            // Усложнить запрос?
             await _dbContext.Database.ExecuteSqlRawAsync("SELECT 1", cancellationToken);
             stopwatch.Stop();
 

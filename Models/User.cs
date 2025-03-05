@@ -15,5 +15,20 @@ namespace SecureServer.Models
         public string ClaimedMods {  get; set; }
         public string? JwtSecretKey { get; set; }
         public string lastip { get; set; }
+        public string role { get; set; }
+        public float balance { get; set; }
     }
+
+    public class purchasesInfo
+    {
+        [Required]
+        [Range(1, int.MaxValue)]
+        public int Id { get; set; } 
+        public int whoBuyed { get; set; }
+        public int serverId { get; set; }
+        public int modId { get; set; }
+        public DateTime date { get; set; }
+        public DateTime expires_date { get; set; }
+    }
+
 }

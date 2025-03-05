@@ -2,7 +2,7 @@
 
 namespace SecureServer.Models
 {
-    public class ActiveToken    // Структура таблицы ActiveTokens
+    public class ActiveToken
     {
         [Required]
         [Range(1, int.MaxValue)]

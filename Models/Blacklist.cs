@@ -2,7 +2,7 @@
 
 namespace SecureServer.Models
 {
-    public class Blacklist
+    public class Blacklist // Надо ли БЛ?
     {
         [Required]
         [Range(1, int.MaxValue)]

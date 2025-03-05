@@ -9,7 +9,9 @@ namespace SecureServer.Models
         public int Id { get; set; }
         public string login { get; set; }
         public string steamid { get; set; }
+        public string subscriptionMods { get; set; }
         public bool subActive { get; set; }
+        public bool BuyWhenExpires { get; set; }
         public DateTime expireData { get; set; }
     }
 }

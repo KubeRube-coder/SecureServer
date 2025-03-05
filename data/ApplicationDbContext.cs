@@ -15,6 +15,8 @@ namespace SecureServer.Data
         public DbSet<Servers> Servers { get; set; }
         public DbSet<moddevelopers> moddevelopers { get; set; }
         public DbSet<premmods> premmods { get; set; }
-
+        public DbSet<PendingMod> pendingMods { get; set; }
+        public DbSet<purchasesInfo> purchasesInfo { get; set; }
+        public DbSet<webhooksError> webhooks { get; set; }
     }
 }
